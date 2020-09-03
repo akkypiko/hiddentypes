@@ -24,6 +24,10 @@ func show(f func(format string, v ...interface{}), v interface{}) {
 	f("show %v", v)
 }
 
+func wrappedLog(v interface{}) {
+	log.Printf("WrappedLog: %d %v", 100, v)
+}
+
 func AdultOnly(people []Person) bool {
 	xxx := 100
 	for _, person := range people {

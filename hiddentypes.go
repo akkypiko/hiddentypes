@@ -68,7 +68,10 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	//log.Printf("tt: %v", tt)
 
 	fs := collectTargetFuncs(pass, targetFuncNames)
-	//log.Printf("fs: %v", fs)
+	log.Printf("fs: %v", fs)
+
+	ws := collectWrappedTargetFuncs(pass, fs) // TODO: 調べるべき引数番号も取得する
+	log.Printf("ws: %v", ws)
 
 	candidate := filterCallInstrPos(pass, fs)
 	//log.Printf("insts: %v", candidate)
@@ -77,10 +80,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	//}
 
 	inspect := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
-	nodeFilter := []ast.Node{
-		(*ast.CallExpr)(nil),
-	}
-	inspect.Preorder(nodeFilter, func(n ast.Node) {
+	inspect.Preorder([]ast.Node{(*ast.CallExpr)(nil)}, func(n ast.Node) {
 		callexpr := n.(*ast.CallExpr)
 		//log.Printf("CHALLENGE: %v [%v]", callexpr.Pos(), pass.Fset.Position(callexpr.Pos()))
 		//log.Printf("CHALLENGE(LP): %v [%v]", callexpr.Lparen, pass.Fset.Position(callexpr.Lparen))
@@ -141,11 +141,13 @@ func setParams(typename, funcnames string) (TypeName, []FuncName, error) {
 func collectTargetFuncs(pass *analysis.Pass, target []FuncName) []*types.Func {
 	fs := []*types.Func{}
 
+	// target関数の取得
+	// target関数は全ての引数が検査対象
 	// targetとして渡された関数のtypes.Object，types.Typeを取得
 	for _, fn := range target {
 		if fn.Recv == nil {
 			// get function
-			f := analysisutil.ObjectOf(pass, fn.Pkg, fn.Name).(*types.Func)
+			f, _ := analysisutil.ObjectOf(pass, fn.Pkg, fn.Name).(*types.Func)
 			if f != nil {
 				fs = append(fs, f)
 			}
@@ -162,7 +164,11 @@ func collectTargetFuncs(pass *analysis.Pass, target []FuncName) []*types.Func {
 		}
 	}
 
-	// TODO:ネストした関数を取得
+	// 関数Fがtarget関数を内部で呼び出している && 関数Xの引数が一つでも変更されずにtarget関数へ渡されている
+	// 上の条件を満たす関数もtarget関数として扱う
+	// 関数Xに対する検査はtarget関数へ渡されている引数についてのみでよくて，かつその引数の型がターゲットの型か何かしらのインターフェース型であるときで十分
+	// この条件のもとで，不動点を探す？
+	// 「どの引数について検査すべきなのか」は別フェーズで判断？
 
 	return fs
 }
@@ -182,5 +188,95 @@ func filterCallInstrPos(pass *analysis.Pass, fs []*types.Func) map[token.Pos]boo
 		}
 	}
 
+	return result
+}
+
+// target関数をラップしているような関数もtargetとする
+// 内部でtarget関数を呼び出す関数&&引数をそのままtarget関数に渡している&&その引数がtarget型or何かしらのインターフェース型
+// だったら追加する
+func collectWrappedTargetFuncs(pass *analysis.Pass, fs []*types.Func) []*types.Func {
+	result := []*types.Func{}
+	inspect := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
+	inspect.Preorder([]ast.Node{(*ast.FuncDecl)(nil)}, func(n ast.Node) {
+		fdecl := n.(*ast.FuncDecl)
+		//log.Printf("collectWrap: %v", fdecl)
+		argpos := isCall(pass, fdecl, fs)
+		//log.Printf("collectWrap:argpos: %v", argpos)
+		if len(argpos) == 0 {
+			return
+		}
+		// TODO: 検査すべき引数番号の情報も返す
+		f := pass.TypesInfo.ObjectOf(fdecl.Name).(*types.Func)
+		result = append(result, f)
+	})
+
+	return result
+}
+
+// ある関数(fdecl)がfsのどれかを呼び出しているか検査する
+// 仮引数を直接関数呼び出しに渡しているような仮引数のインデックスを返す
+func isCall(pass *analysis.Pass, fdecl *ast.FuncDecl, fs []*types.Func) map[int]bool {
+	result := make(map[int]bool)
+	ast.Inspect(fdecl, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.CallExpr:
+			//log.Printf("isCall:n: %v", n)
+			var fn *types.Func
+			switch f := n.Fun.(type) {
+			case *ast.Ident:
+				fn, _ = pass.TypesInfo.ObjectOf(f).(*types.Func)
+				if fn == nil {
+					return true
+				}
+			case *ast.SelectorExpr:
+				fn, _ = pass.TypesInfo.ObjectOf(f.Sel).(*types.Func)
+				if fn == nil {
+					return true
+				}
+			default:
+				return true
+			}
+
+			objmap := argsObjMap(pass, fdecl)
+			//log.Printf("isCall:objmap: %v", objmap)
+
+			for _, target := range fs {
+				if fn == target { // ==で比較可能？
+					// target関数の呼び出し
+					// 実引数が変更されずに使われているか確認(fdeclの仮引数と一致するかで近似)
+					for _, arg := range n.Args {
+						id, _ := arg.(*ast.Ident)
+						if id == nil {
+							continue
+						}
+						obj := pass.TypesInfo.ObjectOf(id)
+						pos, ok := objmap[obj]
+						if !ok {
+							continue
+						}
+
+						result[pos] = true
+					}
+				}
+			}
+		}
+		return true
+	})
+
+	return result
+}
+
+func argsObjMap(pass *analysis.Pass, fdecl *ast.FuncDecl) map[types.Object]int {
+	result := make(map[types.Object]int)
+	count := 0
+	//log.Printf("argsObjMap: %v", fdecl)
+	for _, arg := range fdecl.Type.Params.List {
+		for _, name := range arg.Names {
+			// TODO: mapに追加するのはtarget型か何かしらのinterface型を持つようなものだけで良い
+			//log.Printf("argsObjMap:name: %v", name)
+			result[pass.TypesInfo.ObjectOf(name)] = count
+			count++
+		}
+	}
 	return result
 }
