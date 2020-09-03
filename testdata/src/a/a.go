@@ -32,7 +32,7 @@ func AdultOnly(people []Person) bool {
 			log.Printf("Found not adult: %v\n", person) // want "NG"
 
 			p := &person
-			log.Printf("Found not adult: %v\n", p) // want "NG"
+			log.Printf("Found not adult: %v\n", p) // (wish) want "NG"
 
 			f := log.Printf
 			f("test: %v\n", person) // want "NG"

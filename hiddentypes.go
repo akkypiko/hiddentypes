@@ -2,7 +2,6 @@ package hiddentypes
 
 import (
 	"errors"
-	"fmt"
 	"go/ast"
 	"go/types"
 	"log"
@@ -50,7 +49,7 @@ func init() {
 }
 
 func run(pass *analysis.Pass) (interface{}, error) {
-	fmt.Printf("RUN")
+	log.Printf("RUN")
 
 	targetTypeName, targetFuncNames, err := setParams(flagType, flagFuncs)
 
