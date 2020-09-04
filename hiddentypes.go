@@ -54,12 +54,12 @@ func init() {
 }
 
 func run(pass *analysis.Pass) (interface{}, error) {
-	log.Printf("RUN")
+	// log.Printf("RUN")
 
 	targetTypeName, targetFuncNames, err := setParams(flagType, flagFuncs)
 
-	log.Printf("targetTypeName: %v", targetTypeName)
-	log.Printf("targetFuncNames: %v", targetFuncNames)
+	// log.Printf("targetTypeName: %v", targetTypeName)
+	// log.Printf("targetFuncNames: %v", targetFuncNames)
 
 	if err != nil {
 		return nil, err
@@ -73,10 +73,10 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	//log.Printf("tt: %v", tt)
 
 	fs := collectTargetFuncs(pass, targetFuncNames)
-	log.Printf("fs: %v", fs)
+	// log.Printf("fs: %v", fs)
 
 	ws := collectWrappedTargetFuncs(pass, fs)
-	log.Printf("ws: %v", ws)
+	// log.Printf("ws: %v", ws)
 
 	targetfuncs := append(fs, ws...)
 

@@ -5,18 +5,8 @@ import (
 	"log"
 )
 
-type Sex int
-
-const (
-	Man Sex = iota
-	Woman
-	Otherwise
-)
-
-// HIDE FROM log.Printf log.Panicf
 type Person struct {
 	Name string
-	Sex  Sex
 	Age  int
 }
 
