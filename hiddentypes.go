@@ -257,6 +257,7 @@ func isCall(pass *analysis.Pass, fdecl *ast.FuncDecl, fs []TargetFuncInfo) map[i
 					// target関数の呼び出し
 					// 実引数が変更されずに使われているか確認(fdeclの仮引数と一致するかで近似)
 					for _, arg := range n.Args {
+						// TODO: より正確な使用判定 ///////
 						id, _ := arg.(*ast.Ident)
 						if id == nil {
 							continue
@@ -266,6 +267,7 @@ func isCall(pass *analysis.Pass, fdecl *ast.FuncDecl, fs []TargetFuncInfo) map[i
 						if !ok {
 							continue
 						}
+						///////////////////////////////
 
 						result[pos] = true
 					}
@@ -278,6 +280,7 @@ func isCall(pass *analysis.Pass, fdecl *ast.FuncDecl, fs []TargetFuncInfo) map[i
 	return result
 }
 
+// 関数の定義から引数のオブジェクトとその位置のマップを取得する
 func argsObjMap(pass *analysis.Pass, fdecl *ast.FuncDecl) map[types.Object]int {
 	result := make(map[types.Object]int)
 	count := 0
