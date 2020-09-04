@@ -43,6 +43,11 @@ type FuncName struct {
 	Name string
 }
 
+type TargetFuncInfo struct {
+	Fun *types.Func // 対象の関数
+	Nth []int       // 検査する引数(空なら全て)
+}
+
 func init() {
 	Analyzer.Flags.StringVar(&flagType, "type", "", "target type")
 	Analyzer.Flags.StringVar(&flagFuncs, "funcs", "", "target functions")
@@ -70,10 +75,12 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	fs := collectTargetFuncs(pass, targetFuncNames)
 	log.Printf("fs: %v", fs)
 
-	ws := collectWrappedTargetFuncs(pass, fs) // TODO: 調べるべき引数番号も取得する
+	ws := collectWrappedTargetFuncs(pass, fs)
 	log.Printf("ws: %v", ws)
 
-	candidate := filterCallInstrPos(pass, fs)
+	targetfuncs := append(fs, ws...)
+
+	candidate := filterCallInstrPos(pass, targetfuncs)
 	//log.Printf("insts: %v", candidate)
 	//for c, _ := range candidate {
 	//	log.Printf("candidate: %v [%v]", c, pass.Fset.Position(c))
@@ -84,9 +91,19 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		callexpr := n.(*ast.CallExpr)
 		//log.Printf("CHALLENGE: %v [%v]", callexpr.Pos(), pass.Fset.Position(callexpr.Pos()))
 		//log.Printf("CHALLENGE(LP): %v [%v]", callexpr.Lparen, pass.Fset.Position(callexpr.Lparen))
-		if candidate[callexpr.Lparen] { // dirty hack
+		fi, ok := candidate[callexpr.Lparen]
+		if ok { // dirty hack
 			//log.Printf("FOUND: %v", callexpr)
-			for _, arg := range callexpr.Args {
+			var args []ast.Expr
+			if len(fi.Nth) == 0 {
+				args = callexpr.Args
+			} else {
+				for _, i := range fi.Nth {
+					args = append(args, callexpr.Args[i])
+				}
+			}
+
+			for _, arg := range args {
 				typ := pass.TypesInfo.TypeOf(arg)
 				if types.Identical(typ, tt) {
 					pass.Reportf(callexpr.Pos(), "NG")
@@ -138,8 +155,8 @@ func setParams(typename, funcnames string) (TypeName, []FuncName, error) {
 	return targetTypeName, targetFuncNames, nil
 }
 
-func collectTargetFuncs(pass *analysis.Pass, target []FuncName) []*types.Func {
-	fs := []*types.Func{}
+func collectTargetFuncs(pass *analysis.Pass, target []FuncName) []TargetFuncInfo {
+	fs := []TargetFuncInfo{}
 
 	// target関数の取得
 	// target関数は全ての引数が検査対象
@@ -149,7 +166,7 @@ func collectTargetFuncs(pass *analysis.Pass, target []FuncName) []*types.Func {
 			// get function
 			f, _ := analysisutil.ObjectOf(pass, fn.Pkg, fn.Name).(*types.Func)
 			if f != nil {
-				fs = append(fs, f)
+				fs = append(fs, TargetFuncInfo{f, []int{}})
 			}
 		} else {
 			// get method
@@ -159,29 +176,23 @@ func collectTargetFuncs(pass *analysis.Pass, target []FuncName) []*types.Func {
 			}
 			m := analysisutil.MethodOf(t, fn.Name)
 			if m != nil {
-				fs = append(fs, m)
+				fs = append(fs, TargetFuncInfo{m, []int{}})
 			}
 		}
 	}
 
-	// 関数Fがtarget関数を内部で呼び出している && 関数Xの引数が一つでも変更されずにtarget関数へ渡されている
-	// 上の条件を満たす関数もtarget関数として扱う
-	// 関数Xに対する検査はtarget関数へ渡されている引数についてのみでよくて，かつその引数の型がターゲットの型か何かしらのインターフェース型であるときで十分
-	// この条件のもとで，不動点を探す？
-	// 「どの引数について検査すべきなのか」は別フェーズで判断？
-
 	return fs
 }
 
-func filterCallInstrPos(pass *analysis.Pass, fs []*types.Func) map[token.Pos]bool {
-	result := make(map[token.Pos]bool)
+func filterCallInstrPos(pass *analysis.Pass, fs []TargetFuncInfo) map[token.Pos]TargetFuncInfo {
+	result := make(map[token.Pos]TargetFuncInfo)
 	srcFunc := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA).SrcFuncs
 	for _, sf := range srcFunc {
 		for _, b := range sf.Blocks {
 			for _, i := range b.Instrs {
 				for _, f := range fs {
-					if analysisutil.Called(i, nil, f) {
-						result[i.Pos()] = true
+					if analysisutil.Called(i, nil, f.Fun) {
+						result[i.Pos()] = f
 					}
 				}
 			}
@@ -194,8 +205,8 @@ func filterCallInstrPos(pass *analysis.Pass, fs []*types.Func) map[token.Pos]boo
 // target関数をラップしているような関数もtargetとする
 // 内部でtarget関数を呼び出す関数&&引数をそのままtarget関数に渡している&&その引数がtarget型or何かしらのインターフェース型
 // だったら追加する
-func collectWrappedTargetFuncs(pass *analysis.Pass, fs []*types.Func) []*types.Func {
-	result := []*types.Func{}
+func collectWrappedTargetFuncs(pass *analysis.Pass, fs []TargetFuncInfo) []TargetFuncInfo {
+	result := []TargetFuncInfo{}
 	inspect := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
 	inspect.Preorder([]ast.Node{(*ast.FuncDecl)(nil)}, func(n ast.Node) {
 		fdecl := n.(*ast.FuncDecl)
@@ -205,9 +216,12 @@ func collectWrappedTargetFuncs(pass *analysis.Pass, fs []*types.Func) []*types.F
 		if len(argpos) == 0 {
 			return
 		}
-		// TODO: 検査すべき引数番号の情報も返す
+		pos := []int{}
+		for p, _ := range argpos {
+			pos = append(pos, p)
+		}
 		f := pass.TypesInfo.ObjectOf(fdecl.Name).(*types.Func)
-		result = append(result, f)
+		result = append(result, TargetFuncInfo{f, pos})
 	})
 
 	return result
@@ -215,7 +229,7 @@ func collectWrappedTargetFuncs(pass *analysis.Pass, fs []*types.Func) []*types.F
 
 // ある関数(fdecl)がfsのどれかを呼び出しているか検査する
 // 仮引数を直接関数呼び出しに渡しているような仮引数のインデックスを返す
-func isCall(pass *analysis.Pass, fdecl *ast.FuncDecl, fs []*types.Func) map[int]bool {
+func isCall(pass *analysis.Pass, fdecl *ast.FuncDecl, fs []TargetFuncInfo) map[int]bool {
 	result := make(map[int]bool)
 	ast.Inspect(fdecl, func(n ast.Node) bool {
 		switch n := n.(type) {
@@ -225,15 +239,13 @@ func isCall(pass *analysis.Pass, fdecl *ast.FuncDecl, fs []*types.Func) map[int]
 			switch f := n.Fun.(type) {
 			case *ast.Ident:
 				fn, _ = pass.TypesInfo.ObjectOf(f).(*types.Func)
-				if fn == nil {
-					return true
-				}
 			case *ast.SelectorExpr:
 				fn, _ = pass.TypesInfo.ObjectOf(f.Sel).(*types.Func)
-				if fn == nil {
-					return true
-				}
 			default:
+				return true
+			}
+
+			if fn == nil {
 				return true
 			}
 
@@ -241,7 +253,7 @@ func isCall(pass *analysis.Pass, fdecl *ast.FuncDecl, fs []*types.Func) map[int]
 			//log.Printf("isCall:objmap: %v", objmap)
 
 			for _, target := range fs {
-				if fn == target { // ==で比較可能？
+				if fn == target.Fun { // ==で比較可能？
 					// target関数の呼び出し
 					// 実引数が変更されずに使われているか確認(fdeclの仮引数と一致するかで近似)
 					for _, arg := range n.Args {

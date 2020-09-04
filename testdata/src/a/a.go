@@ -28,6 +28,11 @@ func wrappedLog(v interface{}) {
 	log.Printf("WrappedLog: %d %v", 100, v)
 }
 
+func wrappedLog2(v interface{}) {
+	v = 500
+	log.Printf("WrappedLog: %d %v", 100, v)
+}
+
 func AdultOnly(people []Person) bool {
 	xxx := 100
 	for _, person := range people {
@@ -46,6 +51,9 @@ func AdultOnly(people []Person) bool {
 				g = log.Printf
 			}
 			g("test: %v\n", person) // OK
+
+			wrappedLog(person)  // want "NG"
+			wrappedLog2(person) // OK
 
 			show(log.Printf, person) // OK
 
