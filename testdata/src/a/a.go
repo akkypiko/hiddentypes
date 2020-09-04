@@ -43,7 +43,7 @@ func AdultOnly(people []Person) bool {
 			g("test: %v\n", person) // OK
 
 			wrappedLog(person)  // want "NG"
-			wrappedLog2(person) // OK
+			wrappedLog2(person) // (wish) OK
 
 			show(log.Printf, person) // OK
 
